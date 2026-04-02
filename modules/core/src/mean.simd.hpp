@@ -224,9 +224,10 @@ static int sumsqr_(const T* src0, const uchar* mask, ST* sum, SQT* sqsum, int le
                 v0 = src[0], v1 = src[1];
                 s0 += v0; sq0 += (SQT)v0*v0;
                 s1 += v1; sq1 += (SQT)v1*v1;
-                v0 = src[2], v1 = src[3];
-                s2 += v0; sq2 += (SQT)v0*v0;
-                s3 += v1; sq3 += (SQT)v1*v1;
+                T v2, v3;
+                v2 = src[2], v3 = src[3];
+                s2 += v2; sq2 += (SQT)v2*v2;
+                s3 += v3; sq3 += (SQT)v3*v3;
             }
             sum[k] = s0; sum[k+1] = s1;
             sum[k+2] = s2; sum[k+3] = s3;
@@ -311,7 +312,7 @@ static int sqsum64f( const double* src, const uchar* mask, double* sum, double* 
 SumSqrFunc getSumSqrFunc(int depth)
 {
     CV_INSTRUMENT_REGION();
-    static SumSqrFunc sumSqrTab[] =
+    static SumSqrFunc sumSqrTab[CV_DEPTH_MAX] =
     {
         (SumSqrFunc)GET_OPTIMIZED(sqsum8u), (SumSqrFunc)sqsum8s, (SumSqrFunc)sqsum16u, (SumSqrFunc)sqsum16s,
         (SumSqrFunc)sqsum32s, (SumSqrFunc)GET_OPTIMIZED(sqsum32f), (SumSqrFunc)sqsum64f, 0

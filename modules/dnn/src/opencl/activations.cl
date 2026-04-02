@@ -48,6 +48,10 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 #endif
 
+#if !defined(M_SQRT1_2)
+#define M_SQRT1_2   0.707106781186547524400844362104849039  /* 1/sqrt(2)      */
+#endif
+
 __kernel void ReLUForward(const int count, __global const T* in, __global T* out
 #ifndef RELU_NO_SLOPE
 , KERNEL_ARG_DTYPE negative_slope
@@ -137,7 +141,7 @@ __kernel void PowForward(const int n, __global const T* in, __global T* out,
 {
   int index = get_global_id(0);
   if (index < n)
-    out[index] = pow(shift + scale * in[index], power);
+    out[index] = std::pow(shift + scale * in[index], power);
 }
 
 __kernel void ELUForward(const int n, __global const T* in, __global T* out,

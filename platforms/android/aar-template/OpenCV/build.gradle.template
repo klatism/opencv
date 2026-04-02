@@ -1,11 +1,13 @@
 plugins {
     id 'com.android.library'
     id 'maven-publish'
+    id 'kotlin-android'
 }
 
 android {
     namespace 'org.opencv'
     compileSdk ${COMPILE_SDK}
+    ndkVersion "${NDK_VERSION}"
 
     defaultConfig {
         minSdk ${MIN_SDK}

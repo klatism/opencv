@@ -107,6 +107,12 @@ public:
         writeScalar( key, fs::itoa( value, buf, 10 ));
     }
 
+    void write(const char* key, int64_t value)
+    {
+        char buf[128];
+        writeScalar( key, fs::itoa( value, buf, 10, true ));
+    }
+
     void write( const char* key, double value )
     {
         char buf[128];
@@ -426,12 +432,13 @@ public:
             CV_PARSE_ERROR_CPP( "Missing \':\'" );
 
         saveptr = endptr + 1;
+        if( endptr == ptr )
+            CV_PARSE_ERROR_CPP( "An empty key" );
+
         do c = *--endptr;
         while( c == ' ' );
 
         ++endptr;
-        if( endptr == ptr )
-            CV_PARSE_ERROR_CPP( "An empty key" );
 
         value_placeholder = fs->addNode(map_node, std::string(ptr, endptr - ptr), FileNode::NONE);
         ptr = saveptr;
@@ -567,7 +574,7 @@ public:
             else
             {
             force_int:
-                int ival = (int)strtol( ptr, &endptr, 0 );
+                int64_t ival = strtoll( ptr, &endptr, 0 );
                 node.setValue(FileNode::INT, &ival);
             }
 

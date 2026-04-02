@@ -13,11 +13,7 @@
 
 #ifdef HAVE_DNN_NGRAPH
 #include "../ie_ngraph.hpp"
-#if INF_ENGINE_VER_MAJOR_GT(INF_ENGINE_RELEASE_2020_4)
-#include <ngraph/op/interpolate.hpp>
-#else
-#include <ngraph/op/experimental/layers/interpolate.hpp>
-#endif
+#include <openvino/op/interpolate.hpp>
 #endif
 
 #ifdef HAVE_CUDA
@@ -144,14 +140,20 @@ public:
         {
             // INTER_LINEAR Resize mode does not support INT8 inputs
             InterpolationFlags mode = interpolation == "nearest" ? INTER_NEAREST : INTER_LINEAR;
-            for (size_t n = 0; n < inputs[0].size[0]; ++n)
-            {
-                for (size_t ch = 0; ch < inputs[0].size[1]; ++ch)
+
+            size_t nbatch = inputs[0].size[0];
+            size_t nch = inputs[0].size[1];
+            size_t total_planes = nbatch * nch;
+
+            parallel_for_(Range(0, (int)total_planes), [&](const Range& range){
+                for (int i = range.start; i < range.end; ++i)
                 {
+                    int n = i / nch;
+                    int ch = i % nch;
                     resize(getPlane(inp, n, ch), getPlane(out, n, ch),
                            Size(outWidth, outHeight), 0, 0, mode);
                 }
-            }
+            });
         }
         else if (interpolation == "nearest")
         {
@@ -376,81 +378,52 @@ public:
     {
         auto& ieInpNode = nodes[0].dynamicCast<InfEngineNgraphNode>()->node;
 
-#if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2021_2)
-        ngraph::op::InterpolateAttrs attrs;
-        attrs.pads_begin.push_back(0);
-        attrs.pads_end.push_back(0);
-        attrs.axes = ngraph::AxisSet{2, 3};
-        attrs.align_corners = alignCorners;
+        ov::op::v4::Interpolate::InterpolateAttrs attrs;
 
         if (interpolation == "nearest") {
-            attrs.mode = "nearest";
-            attrs.antialias = false;
+            attrs.mode = ov::op::v4::Interpolate::InterpolateMode::NEAREST;
+            attrs.coordinate_transformation_mode = ov::op::v4::Interpolate::CoordinateTransformMode::HALF_PIXEL;
         } else if (interpolation == "bilinear") {
-            attrs.mode = "linear";
-        } else {
-            CV_Error(Error::StsNotImplemented, "Unsupported interpolation: " + interpolation);
-        }
-
-        std::vector<int64_t> shape = {outHeight, outWidth};
-        auto out_shape = std::make_shared<ngraph::op::Constant>(ngraph::element::i64, ngraph::Shape{2}, shape.data());
-        auto interp = std::make_shared<ngraph::op::Interpolate>(ieInpNode, out_shape, attrs);
-#else
-        ngraph::op::v4::Interpolate::InterpolateAttrs attrs;
-
-#if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2022_1)
-        if (interpolation == "nearest") {
-            attrs.mode = ngraph::op::v4::Interpolate::InterpolateMode::NEAREST;
-            attrs.coordinate_transformation_mode = ngraph::op::v4::Interpolate::CoordinateTransformMode::HALF_PIXEL;
-        } else if (interpolation == "bilinear") {
-            attrs.mode = ngraph::op::v4::Interpolate::InterpolateMode::LINEAR_ONNX;
-            attrs.coordinate_transformation_mode = ngraph::op::v4::Interpolate::CoordinateTransformMode::ASYMMETRIC;
+            attrs.mode = ov::op::v4::Interpolate::InterpolateMode::LINEAR_ONNX;
+            attrs.coordinate_transformation_mode = ov::op::v4::Interpolate::CoordinateTransformMode::ASYMMETRIC;
         } else {
             CV_Error(Error::StsNotImplemented, format("Unsupported interpolation: %s", interpolation.c_str()));
         }
-        attrs.shape_calculation_mode = ngraph::op::v4::Interpolate::ShapeCalcMode::SIZES;
+        attrs.shape_calculation_mode = ov::op::v4::Interpolate::ShapeCalcMode::SIZES;
 
         CV_Assert(!halfPixelCenters || !alignCorners);
         if (halfPixelCenters) {
-            attrs.coordinate_transformation_mode = ngraph::op::v4::Interpolate::CoordinateTransformMode::HALF_PIXEL;
+            attrs.coordinate_transformation_mode = ov::op::v4::Interpolate::CoordinateTransformMode::HALF_PIXEL;
         } else if (alignCorners) {
-            attrs.coordinate_transformation_mode = ngraph::op::v4::Interpolate::CoordinateTransformMode::ALIGN_CORNERS;
+            attrs.coordinate_transformation_mode = ov::op::v4::Interpolate::CoordinateTransformMode::ALIGN_CORNERS;
         }
 
-        attrs.nearest_mode = ngraph::op::v4::Interpolate::NearestMode::ROUND_PREFER_FLOOR;
-#else
-        if (interpolation == "nearest") {
-            attrs.mode = ngraph::op::v4::Interpolate::InterpolateMode::nearest;
-            attrs.coordinate_transformation_mode = ngraph::op::v4::Interpolate::CoordinateTransformMode::half_pixel;
-        } else if (interpolation == "bilinear") {
-            attrs.mode = ngraph::op::v4::Interpolate::InterpolateMode::linear_onnx;
-            attrs.coordinate_transformation_mode = ngraph::op::v4::Interpolate::CoordinateTransformMode::asymmetric;
-        } else {
-            CV_Error(Error::StsNotImplemented, format("Unsupported interpolation: %s", interpolation.c_str()));
+        attrs.nearest_mode = ov::op::v4::Interpolate::NearestMode::ROUND_PREFER_FLOOR;
+
+        std::shared_ptr<ov::Node> out_shape_node;
+        std::shared_ptr<ov::Node> scales_node;
+        if (nodes.size() == 2)
+        {
+            auto& ieRefNode = nodes[1].dynamicCast<InfEngineNgraphNode>()->node;
+            auto ref_shape = std::make_shared<ov::op::v3::ShapeOf>(ieRefNode, ov::element::i64);
+            auto hw_indices = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{2}, std::vector<int64_t>{2, 3});
+            auto gather_axis = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{}, 0LL);
+            out_shape_node = std::make_shared<ov::op::v8::Gather>(ref_shape, hw_indices, gather_axis);
+            std::vector<float> dummy_scales = {1.0f, 1.0f};
+            scales_node = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{2}, dummy_scales.data());
         }
-        attrs.shape_calculation_mode = ngraph::op::v4::Interpolate::ShapeCalcMode::sizes;
-
-        CV_Assert(!halfPixelCenters || !alignCorners);
-        if (halfPixelCenters) {
-            attrs.coordinate_transformation_mode = ngraph::op::v4::Interpolate::CoordinateTransformMode::half_pixel;
-        } else if (alignCorners) {
-            attrs.coordinate_transformation_mode = ngraph::op::v4::Interpolate::CoordinateTransformMode::align_corners;
+        else
+        {
+            std::vector<int64_t> shape = {outHeight, outWidth};
+            out_shape_node = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{2}, shape.data());
+            auto& input_shape = ieInpNode.get_shape();
+            CV_Assert_N(input_shape[2] != 0, input_shape[3] != 0);
+            std::vector<float> scales = {static_cast<float>(outHeight) / input_shape[2],static_cast<float>(outWidth) / input_shape[3]};
+            scales_node = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{2}, scales.data());
         }
 
-        attrs.nearest_mode = ngraph::op::v4::Interpolate::NearestMode::round_prefer_floor;
-#endif // OpenVINO >= 2022.1
-
-        std::vector<int64_t> shape = {outHeight, outWidth};
-        auto out_shape = std::make_shared<ngraph::op::Constant>(ngraph::element::i64, ngraph::Shape{2}, shape.data());
-
-        auto& input_shape = ieInpNode.get_shape();
-        CV_Assert_N(input_shape[2] != 0, input_shape[3] != 0);
-        std::vector<float> scales = {static_cast<float>(outHeight) / input_shape[2], static_cast<float>(outWidth) / input_shape[3]};
-        auto scales_shape = std::make_shared<ngraph::op::Constant>(ngraph::element::f32, ngraph::Shape{2}, scales.data());
-
-        auto axes = std::make_shared<ngraph::op::Constant>(ngraph::element::i64, ngraph::Shape{2}, std::vector<int64_t>{2, 3});
-        auto interp = std::make_shared<ngraph::op::v4::Interpolate>(ieInpNode, out_shape, scales_shape, axes, attrs);
-#endif
+        auto axes = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{2}, std::vector<int64_t>{2, 3});
+        auto interp = std::make_shared<ov::op::v4::Interpolate>(ieInpNode, out_shape_node, scales_node, axes, attrs);
         return Ptr<BackendNode>(new InfEngineNgraphNode(interp));
     }
 #endif  // HAVE_DNN_NGRAPH
@@ -490,8 +463,8 @@ public:
     }
 #endif
 
-    virtual bool tryQuantize(const std::vector<std::vector<float> > &scales,
-                             const std::vector<std::vector<int> > &zeropoints, LayerParams& params) CV_OVERRIDE
+    bool tryQuantize(const std::vector<std::vector<float> > &scales,
+                     const std::vector<std::vector<int> > &zeropoints, LayerParams& params) CV_OVERRIDE
     {
         return true;
     }

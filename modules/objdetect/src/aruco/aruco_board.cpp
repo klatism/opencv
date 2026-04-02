@@ -99,21 +99,6 @@ void Board::Impl::generateImage(Size outSize, OutputArray img, int marginSize, i
     float sizeX = maxX - minX;
     float sizeY = maxY - minY;
 
-    // proportion transformations
-    float xReduction = sizeX / float(out.cols);
-    float yReduction = sizeY / float(out.rows);
-
-    // determine the zone where the markers are placed
-    if(xReduction > yReduction) {
-        int nRows = int(sizeY / xReduction);
-        int rowsMargins = (out.rows - nRows) / 2;
-        out.adjustROI(-rowsMargins, -rowsMargins, 0, 0);
-    } else {
-        int nCols = int(sizeX / yReduction);
-        int colsMargins = (out.cols - nCols) / 2;
-        out.adjustROI(0, 0, -colsMargins, -colsMargins);
-    }
-
     // now paint each marker
     Mat marker;
     Point2f outCorners[3];
@@ -130,7 +115,13 @@ void Board::Impl::generateImage(Size outSize, OutputArray img, int marginSize, i
         }
 
         // get marker
-        Size dst_sz(outCorners[2] - outCorners[0]); // assuming CCW order
+        Point2f vecWidth  = outCorners[1] - outCorners[0];
+        float width = (float)cv::norm(vecWidth);
+
+        Point2f vecHeight = outCorners[2] - outCorners[0];
+        float height = (float)cv::norm(vecHeight);
+
+        Size dst_sz(cvRound(width), cvRound(height));
         dst_sz.width = dst_sz.height = std::min(dst_sz.width, dst_sz.height); //marker should be square
         dictionary.generateImageMarker(ids[m], dst_sz.width, marker, borderBits);
 
@@ -527,9 +518,9 @@ void CharucoBoardImpl::generateImage(Size outSize, OutputArray img, int marginSi
         for(int x = 0; x < size.width; x++) {
 
             if(legacyPattern && (size.height % 2 == 0)) { // legacy behavior only for even row count patterns
-                if((y + 1) % 2 != x % 2) continue; // white corner, dont do anything
+                if((y + 1) % 2 != x % 2) continue; // white corner, don't do anything
             } else {
-                if(y % 2 != x % 2) continue; // white corner, dont do anything
+                if(y % 2 != x % 2) continue; // white corner, don't do anything
             }
 
             float startX = pixInSquare * float(x);

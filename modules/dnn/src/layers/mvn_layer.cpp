@@ -171,7 +171,9 @@ public:
             String buildopt = "-DNUM=4" + opts;
             ocl::Kernel k("mean_fuse4", ocl::dnn::mvn_oclsrc, buildopt + " -DKERNEL_MEAN_FUSE");
             size_t localsize[] = { LOCAL_SIZE };
-            size_t globalsize[] = { (size_t)s[0] / 4 * localsize[0] };
+            size_t groups = std::max<size_t>(1, s[0] / 4);
+            size_t globalsize[] = { groups * localsize[0] };
+
 
             int argId = 0;
             k.set(argId++, ocl::KernelArg::PtrReadOnly(inpMat));
@@ -336,15 +338,11 @@ public:
                                         const std::vector<Ptr<BackendNode> >& nodes) CV_OVERRIDE
     {
         auto& ieInpNode = nodes[0].dynamicCast<InfEngineNgraphNode>()->node;
-#if INF_ENGINE_VER_MAJOR_LE(INF_ENGINE_RELEASE_2021_2)
-        auto mvn = std::make_shared<ngraph::op::MVN>(ieInpNode, acrossChannels, normVariance, eps);
-#else
         int64_t start_axis = acrossChannels ? 1 : 2;
         std::vector<int64_t> axes_v(ieInpNode.get_shape().size() - start_axis);
         std::iota(axes_v.begin(), axes_v.end(), start_axis);
-        auto axes = std::make_shared<ngraph::op::Constant>(ngraph::element::i64, ngraph::Shape{axes_v.size()}, axes_v.data());
-        auto mvn = std::make_shared<ngraph::op::v6::MVN>(ieInpNode, axes, normVariance, eps, ngraph::op::MVNEpsMode::INSIDE_SQRT);
-#endif
+        auto axes = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{axes_v.size()}, axes_v.data());
+        auto mvn = std::make_shared<ov::op::v6::MVN>(ieInpNode, axes, normVariance, eps, ov::op::MVNEpsMode::INSIDE_SQRT);
         return Ptr<BackendNode>(new InfEngineNgraphNode(mvn));
     }
 #endif  // HAVE_DNN_NGRAPH
@@ -378,7 +376,7 @@ public:
                            const std::vector<MatShape> &outputs) const CV_OVERRIDE
     {
         CV_UNUSED(outputs); // suppress unused variable warning
-        long flops = 0;
+        int64 flops = 0;
         for(int i = 0; i < inputs.size(); i++)
         {
             flops += 6*total(inputs[i]) + 3*total(inputs[i], 0, normVariance ? 2 : 1);

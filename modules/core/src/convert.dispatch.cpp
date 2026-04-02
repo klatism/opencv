@@ -11,13 +11,13 @@
 namespace cv {
 
 namespace hal {
-void cvt16f32f(const float16_t* src, float* dst, int len)
+void cvt16f32f(const hfloat* src, float* dst, int len)
 {
     CV_INSTRUMENT_REGION();
     CV_CPU_DISPATCH(cvt16f32f, (src, dst, len),
         CV_CPU_DISPATCH_MODES_ALL);
 }
-void cvt32f16f(const float* src, float16_t* dst, int len)
+void cvt32f16f(const float* src, hfloat* dst, int len)
 {
     CV_INSTRUMENT_REGION();
     CV_CPU_DISPATCH(cvt32f16f, (src, dst, len),
@@ -252,6 +252,7 @@ void Mat::convertTo(OutputArray dst, int type_, double alpha, double beta) const
     if (empty())
     {
         dst.release();
+        dst.create(size(), type_ >= 0 ? type_ : type());
         return;
     }
 
@@ -281,6 +282,15 @@ void Mat::convertTo(OutputArray dst, int type_, double alpha, double beta) const
     dst.create(dims, size, dtype);
     Mat dstMat = dst.getMat();
 
+    if( dims <= 2 )
+    {
+        CALL_HAL(convertScale, cv_hal_convertScale, src.data, src.step, dstMat.data, dstMat.step, src.cols * cn, src.rows, sdepth, ddepth, alpha, beta);
+    }
+    else if( src.isContinuous() && dstMat.isContinuous() )
+    {
+        CALL_HAL(convertScale, cv_hal_convertScale, src.data, 0, dstMat.data, 0, (int)src.total() * cn, 1, sdepth, ddepth, alpha, beta);
+    }
+
     BinaryFunc func = noScale ? getConvertFunc(sdepth, ddepth) : getConvertScaleFunc(sdepth, ddepth);
     double scale[] = {alpha, beta};
     CV_Assert( func != 0 );
@@ -309,6 +319,7 @@ void UMat::convertTo(OutputArray dst, int type_, double alpha, double beta) cons
     if (empty())
     {
         dst.release();
+        dst.create(size(), type_ >= 0 ? type_ : type());
         return;
     }
 

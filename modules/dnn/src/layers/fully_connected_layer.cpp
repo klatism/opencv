@@ -228,6 +228,7 @@ public:
             p.useAVX512 = CV_CPU_HAS_SUPPORT_AVX512_SKX;
             p.useRVV = checkHardwareSupport(CPU_RVV);
             p.useLASX = checkHardwareSupport(CPU_LASX);
+            p.useSVE = checkHardwareSupport(CPU_SVE);
 
             parallel_for_(Range(0, nstripes), p, nstripes);
         }
@@ -277,7 +278,13 @@ public:
                     opt_AVX::fastGEMM1T( sptr, wptr, wstep, biasptr, dptr, nw, vecsize_aligned);
                 else
             #endif
-            #if CV_TRY_RVV
+            #if CV_TRY_SVE
+                if( useSVE ) {
+                    opt_SVE::fastGEMM1T( sptr, wptr, wstep, biasptr, dptr, nw, vecsize_aligned);
+                }
+                else
+            #endif
+            #if CV_TRY_RVV && CV_RVV
                 if( useRVV )
                     opt_RVV::fastGEMM1T( sptr, wptr, wstep, biasptr, dptr, nw, vecsize);
                 else
@@ -342,6 +349,7 @@ public:
         bool useAVX512;
         bool useRVV;
         bool useLASX;
+        bool useSVE;
     };
 
 #ifdef HAVE_OPENCL
@@ -787,20 +795,20 @@ public:
                                         const std::vector<Ptr<BackendNode> >& nodes) CV_OVERRIDE
     {
         auto& ieInpNode = nodes[0].dynamicCast<InfEngineNgraphNode>()->node;
-        std::shared_ptr<ngraph::Node> matmul;
+        std::shared_ptr<ov::Node> matmul;
 
         if (nodes.size() == 2)
         {
             auto& inp2 = nodes[1].dynamicCast<InfEngineNgraphNode>()->node;
-            matmul = std::make_shared<ngraph::op::MatMul>(ieInpNode, inp2, transA, transB);
+            matmul = std::make_shared<ov::op::v0::MatMul>(ieInpNode, inp2, transA, transB);
         }
         else
         {
             std::vector<int> shape(1 + normalize_axis(axis, ieInpNode.get_shape().size()), 0);
             shape[shape.size() - 1] = -1;
-            auto inp = std::make_shared<ngraph::op::v1::Reshape>(
+            auto inp = std::make_shared<ov::op::v1::Reshape>(
                 ieInpNode,
-                std::make_shared<ngraph::op::Constant>(ngraph::element::i32, ngraph::Shape{shape.size()}, shape.data()),
+                std::make_shared<ov::op::v0::Constant>(ov::element::i32, ov::Shape{shape.size()}, shape.data()),
                 true
             );
 
@@ -810,21 +818,21 @@ public:
             } else {
                 weight_shape = {(size_t)blobs[0].size[0], (size_t)blobs[0].size[1]};
             }
-            auto ieWeights = std::make_shared<ngraph::op::Constant>(ngraph::element::f32, weight_shape, blobs[0].data);
-            matmul = std::make_shared<ngraph::op::MatMul>(inp, ieWeights, transA, transB);
+            auto ieWeights = std::make_shared<ov::op::v0::Constant>(ov::element::f32, weight_shape, blobs[0].data);
+            matmul = std::make_shared<ov::op::v0::MatMul>(inp, ieWeights, transA, transB);
         }
 
         if (bias) {
-            auto bias_node = std::make_shared<ngraph::op::Constant>(ngraph::element::f32,
-                                              ngraph::Shape{(size_t)blobs[1].size[1]}, blobs[1].data);
-            matmul = std::make_shared<ngraph::op::v1::Add>(matmul, bias_node, ngraph::op::AutoBroadcastType::NUMPY);
+            auto bias_node = std::make_shared<ov::op::v0::Constant>(ov::element::f32,
+                                              ov::Shape{(size_t)blobs[1].size[1]}, blobs[1].data);
+            matmul = std::make_shared<ov::op::v1::Add>(matmul, bias_node, ov::op::AutoBroadcastType::NUMPY);
         }
         return Ptr<BackendNode>(new InfEngineNgraphNode(matmul));
     }
 #endif  // HAVE_DNN_NGRAPH
 
-    virtual bool tryQuantize(const std::vector<std::vector<float> > &scales,
-                             const std::vector<std::vector<int> > &zeropoints, LayerParams& params) CV_OVERRIDE
+    bool tryQuantize(const std::vector<std::vector<float> > &scales,
+                     const std::vector<std::vector<int> > &zeropoints, LayerParams& params) CV_OVERRIDE
     {
         if (blobs.empty())
             return false;

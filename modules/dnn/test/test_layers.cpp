@@ -307,6 +307,11 @@ TEST_P(Test_Caffe_layers, Dropout)
 
 TEST_P(Test_Caffe_layers, Concat)
 {
+    if (cvtest::skipUnstableTests && (backend == DNN_BACKEND_VKCOM))
+    {
+        throw SkipTestException("Test_Caffe_layers.Concat test produces unstable result with Vulkan");
+    }
+
 #if defined(INF_ENGINE_RELEASE)
 #if INF_ENGINE_VER_MAJOR_GE(2019010000) && INF_ENGINE_VER_MAJOR_LT(2019020000)
     if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019 && target == DNN_TARGET_MYRIAD)
@@ -1795,6 +1800,50 @@ INSTANTIATE_TEST_CASE_P(/**/, Layer_Test_ShuffleChannel, Combine(
 /*group*/        Values(1, 2, 3, 6), dnnBackendsAndTargets(/*with IE*/ false)
 ));
 
+TEST(Layer_Test_ReduceMean, accuracy_input_0)
+{
+    vector<int> szData = { 2, 1, 2, 1 ,2 };
+    std::vector<float> initData = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    Mat inpInitA(szData, CV_32FC1, Mat(initData).data);
+    std::vector<float> resAxes0 = { 2, 3, 4, 5 };
+    std::vector<float> resAxes1 = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    std::vector<float> resAxes2 = { 1, 2, 5, 6 };
+    std::vector<float> resAxes3 = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    std::vector<float> resAxes4 = { 0.5, 2.5, 4.5, 6.5 };
+    std::vector < vector<float>> resReduceMean = { resAxes0, resAxes1, resAxes2, resAxes3, resAxes4 };
+
+
+    for (int i = 0; i < resReduceMean.size(); i++)
+    {
+        Net net;
+        LayerParams lp;
+        lp.set("keepdims", 0);
+        lp.type = "Reduce";
+        lp.set("reduce", "MEAN");
+        lp.name = "testReduceMean";
+        lp.set("axes", i);
+        lp.blobs.push_back(inpInitA);
+
+        net.addLayerToPrev(lp.name, lp.type, lp);
+        net.setInput(inpInitA);
+        net.setPreferableBackend(DNN_BACKEND_OPENCV);
+
+        Mat output = net.forward();
+        MatShape gt_shape;
+        for (int j = 0; j < szData.size(); j++)
+        {
+            if (i == j) continue;
+            gt_shape.push_back(szData[j]);
+        }
+
+        EXPECT_EQ(gt_shape, shape(output));
+
+        Mat a = output.reshape(1, output.total());
+        normAssert(a, Mat(resReduceMean[i]));
+    }
+}
+
+
 // Check if relu is not fused to convolution if we requested it's output
 TEST(Layer_Test_Convolution, relu_fusion)
 {
@@ -2738,5 +2787,48 @@ INSTANTIATE_TEST_CASE_P(TestLayerFusion, ConvolutionActivationEltwiseFusion, Com
 /* eltwise weighted */  testing::Bool(),
                         TestLayerFusion::dnnBackendsAndTargetsForFusionTests()
 ));
+
+TEST(ConvolutionWinograd, Accuracy)
+{
+    Mat weights({2, 1, 3, 3}, CV_32F);
+    randn(weights, 0, 1);
+
+    // Check convolution can switch between implementations on changed shape.
+    auto getNet = [&]() {
+        Net net;
+        LayerParams lp;
+        lp.name = "conv";
+        lp.type = "Convolution";
+        lp.set("kernel_size", 3);
+        lp.set("num_output", 2);
+        lp.set("pad", 0);
+        lp.set("stride", 1);
+        lp.set("bias_term", false);
+
+        lp.blobs.push_back(weights);
+        net.addLayerToPrev(lp.name, lp.type, lp);
+        return net;
+    };
+
+    Mat inpSmall({1, 1, 5, 5}, CV_32F);
+    Mat inpLarge({1, 1, 64, 64}, CV_32F);
+    randn(inpSmall, 0, 1);
+    randn(inpLarge, 0, 1);
+
+    Net net1 = getNet();
+    Net net2 = getNet();
+    net1.setInput(inpSmall);
+    net2.setInput(inpLarge);
+    Mat refSmall = net1.forward();
+    Mat refLarge = net2.forward();
+
+    net1.setInput(inpLarge);
+    net2.setInput(inpSmall);
+    Mat outLarge = net1.forward();
+    Mat outSmall = net2.forward();
+
+    normAssert(outSmall, refSmall, "Small input after large", 0.0, 0.0);
+    normAssert(outLarge, refLarge, "Large input after small", 0.0, 0.0);
+}
 
 }} // namespace

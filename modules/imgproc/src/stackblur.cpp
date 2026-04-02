@@ -41,6 +41,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 #include "opencv2/core/hal/intrin.hpp"
 
 #include <iostream>
+#include <algorithm>
 
 using namespace std;
 
@@ -547,7 +548,7 @@ public:
         }
         else
         {
-            size_t bufSize = CN * (width + radius) * sizeof(TBuf) + 2 * CN * sizeof(TBuf);
+            size_t bufSize = CN * (width + kernelSize) * sizeof(TBuf) + 2 * CN * sizeof(TBuf);
             AutoBuffer<uchar> _buf(bufSize + 16);
             uchar* bufptr = alignPtr(_buf.data(), 16);
             TBuf* diffVal = (TBuf*)bufptr;
@@ -1199,11 +1200,16 @@ void stackBlur(InputArray _src, OutputArray _dst, Size ksize)
     CV_Assert( ksize.width  > 0 && ksize.width  % 2 == 1 &&
                ksize.height > 0 && ksize.height % 2 == 1 );
 
-    int radiusH = ksize.height / 2;
-    int radiusW = ksize.width / 2;
-
     int stype = _src.type(), sdepth = _src.depth();
     Mat src = _src.getMat();
+
+    if (ksize.width > src.cols)
+        ksize.width = (src.cols % 2 == 0) ? std::max(1, src.cols - 1) : src.cols;
+    if (ksize.height > src.rows)
+        ksize.height = (src.rows % 2 == 0) ? std::max(1, src.rows - 1) : src.rows;
+
+    int radiusH = ksize.height / 2;
+    int radiusW = ksize.width / 2;
 
     if (ksize.width == 1)
     {
